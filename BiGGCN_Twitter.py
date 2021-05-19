@@ -10,18 +10,22 @@ from torch_geometric.data import DataLoader
 from tqdm import tqdm
 from rand5fold import *
 from evaluate import *
-from torch_geometric.nn import GCNConv,GATConv,GatedGraphConv
+from torch_geometric.nn import GatedGraphConv
 import copy
+from typing import Union, Tuple, Optional, Callable
+from torch_geometric.typing import PairTensor, Adj
+
+
+
 device = th.device('cuda:0' if th.cuda.is_available() else 'cpu')
 
 print(device)
-
-class TDrumorGCN(th.nn.Module):
+class TDrumorGGCN(th.nn.Module):
     def __init__(self,in_feats,hid_feats,out_feats):
-        super(TDrumorGCN, self).__init__()
-        self.conv1 = GCNConv(in_feats, hid_feats,improved=False,cached=False,add_self_loops=True)
+        super(TDrumorGGCN, self).__init__()
+        self.conv1 = GatedGraphConv(in_feats, hid_feats,aggr='add',bias=True)
    
-        self.conv2 = GCNConv(hid_feats+in_feats, out_feats,improved=False,cached=False,add_self_loops=True)
+        self.conv2 = GatedGraphConv(hid_feats+in_feats, out_feats,aggr='add',bias=True)
         
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
@@ -49,15 +53,16 @@ class TDrumorGCN(th.nn.Module):
 
         return x
 
-class BUrumorGCN(th.nn.Module):
+class BUrumorGGCN(th.nn.Module):
     def __init__(self,in_feats,hid_feats,out_feats):
-        super(BUrumorGCN, self).__init__()
-        self.conv1 = GCNConv(in_feats, hid_feats,improved=False,cached=False,add_self_loops=True)
+        super(BUrumorGGCN, self).__init__()
+        self.conv1 = GatedGraphConv(in_feats, hid_feats,aggr='add',bias=True)
         
-        self.conv2 = GCNConv(hid_feats+in_feats, out_feats,improved=False,cached=False,add_self_loops=True)
+        self.conv2 = GatedGraphConv(hid_feats+in_feats, out_feats,aggr='add',bias=True)
         
     def forward(self, data):
         x, edge_index = data.x, data.BU_edge_index
+        print(len(x))
         x1 = copy.copy(x.float())
         x = self.conv1(x, edge_index)
         x2 = copy.copy(x)
@@ -86,28 +91,28 @@ class BUrumorGCN(th.nn.Module):
 class Net(th.nn.Module):
     def __init__(self,in_feats,hid_feats,out_feats):
         super(Net, self).__init__()
-        self.TDrumorGCN = TDrumorGCN(in_feats, hid_feats, out_feats)
-        self.BUrumorGCN = BUrumorGCN(in_feats, hid_feats, out_feats)
+        self.TDrumorGGCN= TDrumorGGCN(in_feats, hid_feats, out_feats)
+        self.BUrumorGGCN = BUrumorGGCN(in_feats, hid_feats, out_feats)
         self.fc=th.nn.Linear((out_feats+hid_feats)*2,4)
 
     def forward(self, data):
-        TD_x = self.TDrumorGCN(data)
-        BU_x = self.BUrumorGCN(data)
+        TD_x = self.TDrumorGGCN(data)
+        BU_x = self.BUrumorGGCN(data)
         x = th.cat((BU_x,TD_x), 1)
         x=self.fc(x)
         x = F.log_softmax(x, dim=1)
         return x
 
 
-def train_GCN(treeDic, x_test, x_train,TDdroprate,BUdroprate,lr, weight_decay,patience,n_epochs,batchsize,dataname,iter):
+def train_GGCN(treeDic, x_test, x_train,TDdroprate,BUdroprate,lr, weight_decay,patience,n_epochs,batchsize,dataname,iter):
     model = Net(5000,64,64).to(device)
-    BU_params=list(map(id,model.BUrumorGCN.conv1.parameters()))
-    BU_params += list(map(id, model.BUrumorGCN.conv2.parameters()))
+    BU_params=list(map(id,model.BUrumorGGCN.conv1.parameters()))
+    BU_params += list(map(id, model.BUrumorGGCN.conv2.parameters()))
     base_params=filter(lambda p:id(p) not in BU_params,model.parameters())
     optimizer = th.optim.Adam([
         {'params':base_params},
-        {'params':model.BUrumorGCN.conv1.parameters(),'lr':lr/5},
-        {'params': model.BUrumorGCN.conv2.parameters(), 'lr': lr/5}
+        {'params':model.BUrumorGGCN.conv1.parameters(),'lr':lr/5},
+        {'params': model.BUrumorGGCN.conv2.parameters(), 'lr': lr/5}
     ], lr=lr, weight_decay=weight_decay)
     model.train()
     train_losses = []
@@ -187,7 +192,7 @@ def train_GCN(treeDic, x_test, x_train,TDdroprate,BUdroprate,lr, weight_decay,pa
                                                        np.mean(temp_val_Recll4), np.mean(temp_val_F4))]
         print('results:', res)
         early_stopping(np.mean(temp_val_losses), np.mean(temp_val_accs), np.mean(temp_val_F1), np.mean(temp_val_F2),
-                       np.mean(temp_val_F3), np.mean(temp_val_F4), model, 'BiGCN', dataname)
+                       np.mean(temp_val_F3), np.mean(temp_val_F4), model, 'BiGGCN', dataname)
         accs =np.mean(temp_val_accs)
         F1 = np.mean(temp_val_F1)
         F2 = np.mean(temp_val_F2)
@@ -213,7 +218,7 @@ def main(obj):
     BUdroprate=0.2
     datasetname=""+obj
     iterations=1
-    model="GCN"
+    model="GGCN"
     test_accs = []
     NR_F1 = []
     FR_F1 = []
@@ -226,7 +231,7 @@ def main(obj):
         fold3_x_test, fold3_x_train, \
         fold4_x_test,fold4_x_train = load5foldData(datasetname)
         treeDic=loadTree(datasetname)
-        train_losses, val_losses, train_accs, val_accs0, accs0, F1_0, F2_0, F3_0, F4_0 = train_GCN(treeDic,
+        train_losses, val_losses, train_accs, val_accs0, accs0, F1_0, F2_0, F3_0, F4_0 = train_GGCN(treeDic,
                                                                                                    fold0_x_test,
                                                                                                    fold0_x_train,
                                                                                                    TDdroprate,BUdroprate,
@@ -236,7 +241,7 @@ def main(obj):
                                                                                                    batchsize,
                                                                                                    datasetname,
                                                                                                    iter)
-        train_losses, val_losses, train_accs, val_accs1, accs1, F1_1, F2_1, F3_1, F4_1 = train_GCN(treeDic,
+        train_losses, val_losses, train_accs, val_accs1, accs1, F1_1, F2_1, F3_1, F4_1 = train_GGCN(treeDic,
                                                                                                    fold1_x_test,
                                                                                                    fold1_x_train,
                                                                                                    TDdroprate,BUdroprate, lr,
@@ -246,7 +251,7 @@ def main(obj):
                                                                                                    batchsize,
                                                                                                    datasetname,
                                                                                                    iter)
-        train_losses, val_losses, train_accs, val_accs2, accs2, F1_2, F2_2, F3_2, F4_2 = train_GCN(treeDic,
+        train_losses, val_losses, train_accs, val_accs2, accs2, F1_2, F2_2, F3_2, F4_2 = train_GGCN(treeDic,
                                                                                                    fold2_x_test,
                                                                                                    fold2_x_train,
                                                                                                    TDdroprate,BUdroprate, lr,
@@ -256,7 +261,7 @@ def main(obj):
                                                                                                    batchsize,
                                                                                                    datasetname,
                                                                                                    iter)
-        train_losses, val_losses, train_accs, val_accs3, accs3, F1_3, F2_3, F3_3, F4_3 = train_GCN(treeDic,
+        train_losses, val_losses, train_accs, val_accs3, accs3, F1_3, F2_3, F3_3, F4_3 = train_GGCN(treeDic,
                                                                                                    fold3_x_test,
                                                                                                    fold3_x_train,
                                                                                                    TDdroprate,BUdroprate, lr,
@@ -266,7 +271,7 @@ def main(obj):
                                                                                                    batchsize,
                                                                                                    datasetname,
                                                                                                    iter)
-        train_losses, val_losses, train_accs, val_accs4, accs4, F1_4, F2_4, F3_4, F4_4 = train_GCN(treeDic,
+        train_losses, val_losses, train_accs, val_accs4, accs4, F1_4, F2_4, F3_4, F4_4 = train_GGCN(treeDic,
                                                                                                    fold4_x_test,
                                                                                                    fold4_x_train,
                                                                                                    TDdroprate,BUdroprate, lr,

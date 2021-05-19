@@ -10,15 +10,22 @@ from torch_geometric.data import DataLoader
 from tqdm import tqdm
 from rand5fold import *
 from evaluate import *
-from torch_geometric.nn import GCNConv,GATConv,GatedGraphConv
+from torch_geometric.nn import GCNConv,GATConv,SAGEConv,SGConv,LEConv,TAGConv,GraphConv,ARMAConv
 import copy
+from typing import Union, Tuple, Optional, Callable
+from torch_geometric.typing import PairTensor, Adj
+
+
+
 device = th.device('cuda:0' if th.cuda.is_available() else 'cpu')
+
+print(device)
 class TDrumorGAT(th.nn.Module):
     def __init__(self,in_feats,hid_feats,out_feats):
         super(TDrumorGAT, self).__init__()
-        self.conv1 = GATConv(in_feats, hid_feats)
+        self.conv1 = GATConv(in_feats, hid_feats,heads=1,concat=True,negative_slope=0.2,dropout=0,add_self_loops=True)
    
-        self.conv2 = GATConv(hid_feats+in_feats, out_feats)
+        self.conv2 = GATConv(hid_feats+in_feats, out_feats,heads=1,concat=True,negative_slope=0.2,dropout=0,add_self_loops=True)
         
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
@@ -49,12 +56,13 @@ class TDrumorGAT(th.nn.Module):
 class BUrumorGAT(th.nn.Module):
     def __init__(self,in_feats,hid_feats,out_feats):
         super(BUrumorGAT, self).__init__()
-        self.conv1 = GATConv(in_feats, hid_feats)
+        self.conv1 = GATConv(in_feats, hid_feats,heads=1,concat=True,negative_slope=0.2,dropout=0,add_self_loops=True)
         
-        self.conv2 = GATConv(hid_feats+in_feats, out_feats)
+        self.conv2 = GATConv(hid_feats+in_feats, out_feats,heads=1,concat=True,negative_slope=0.2,dropout=0,add_self_loops=True)
         
     def forward(self, data):
         x, edge_index = data.x, data.BU_edge_index
+        print(len(x))
         x1 = copy.copy(x.float())
         x = self.conv1(x, edge_index)
         x2 = copy.copy(x)
@@ -114,8 +122,8 @@ def train_GAT(treeDic, x_test, x_train,TDdroprate,BUdroprate,lr, weight_decay,pa
     early_stopping = EarlyStopping(patience=patience, verbose=True)
     for epoch in range(n_epochs):
         traindata_list, testdata_list = loadBiData(dataname, treeDic, x_train, x_test, TDdroprate,BUdroprate)
-        train_loader = DataLoader(traindata_list, batch_size=batchsize, shuffle=True, num_workers=5)
-        test_loader = DataLoader(testdata_list, batch_size=batchsize, shuffle=True, num_workers=5)
+        train_loader = DataLoader(traindata_list, batch_size=batchsize, shuffle=True, num_workers=0)
+        test_loader = DataLoader(testdata_list, batch_size=batchsize, shuffle=True, num_workers=0)
         avg_loss = []
         avg_acc = []
         batch_idx = 0
@@ -135,9 +143,12 @@ def train_GAT(treeDic, x_test, x_train,TDdroprate,BUdroprate,lr, weight_decay,pa
             avg_acc.append(train_acc)
             print("Iter {:03d} | Epoch {:05d} | Batch{:02d} | Train_Loss {:.4f}| Train_Accuracy {:.4f}".format(iter,epoch, batch_idx,
                                                                                                  loss.item(),
-                                                                                                 train_acc))
+                                                                                               train_acc))
+            with open('train_loss.txt', 'a', encoding='utf-8') as f:
+                f.write(str(np.mean(avg_loss)) + '\n')
             batch_idx = batch_idx + 1
-
+        with open('train_loss.txt', 'a', encoding='utf-8') as f:
+            f.write(str(np.mean(avg_loss))+'\n')
         train_losses.append(np.mean(avg_loss))
         train_accs.append(np.mean(avg_acc))
 
@@ -172,7 +183,8 @@ def train_GAT(treeDic, x_test, x_train,TDdroprate,BUdroprate,lr, weight_decay,pa
         val_accs.append(np.mean(temp_val_accs))
         print("Epoch {:05d} | Val_Loss {:.4f}| Val_Accuracy {:.4f}".format(epoch, np.mean(temp_val_losses),
                                                                            np.mean(temp_val_accs)))
-
+        with open('val_loss.txt', 'a', encoding='utf-8') as f:
+            f.write(str(np.mean(temp_val_losses))+'\n')
         res = ['acc:{:.4f}'.format(np.mean(temp_val_Acc_all)),
                'C1:{:.4f},{:.4f},{:.4f},{:.4f}'.format(np.mean(temp_val_Acc1), np.mean(temp_val_Prec1),
                                                        np.mean(temp_val_Recll1), np.mean(temp_val_F1)),
@@ -209,7 +221,7 @@ def main(obj):
     TDdroprate=0.2
     BUdroprate=0.2
     datasetname=""+obj
-    iterations=int(sys.argv[2])
+    iterations=1
     model="GAT"
     test_accs = []
     NR_F1 = []
